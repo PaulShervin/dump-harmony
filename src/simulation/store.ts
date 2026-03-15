@@ -218,6 +218,8 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
   grid: [],
   zones: [],
   trucks: [],
+  particles: [],
+  currentZoneIndex: 0,
   metrics: {
     totalDumps: 0,
     missedDumps: 0,
@@ -236,6 +238,8 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
       grid,
       zones,
       trucks,
+      particles: [],
+      currentZoneIndex: 0,
       tick: 0,
       running: false,
       metrics: {
@@ -263,22 +267,33 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
     const state = get();
     if (!state.running) return;
 
-    const { grid, zones, trucks, metrics, speed } = state;
+    const { grid, zones, trucks, metrics, speed, particles, currentZoneIndex } = state;
     const newTrucks = trucks.map(t => ({ ...t }));
     let newDumps = 0;
     let missedThisStep = 0;
+    let newParticles = updateParticles([...particles]);
+    let zoneIdx = currentZoneIndex;
+
+    // Determine active zone - complete one zone before moving to next
+    const activeZone = zones[zoneIdx];
+    if (activeZone && isZoneComplete(activeZone, grid)) {
+      zoneIdx = Math.min(zoneIdx + 1, zones.length - 1);
+    }
 
     for (const truck of newTrucks) {
       const effectiveSpeed = truck.speed * speed;
 
       switch (truck.state) {
         case 'idle': {
-          const zone = zones[truck.assignedZone];
-          const cell = findNextDumpCell(zone, grid);
+          // All trucks focus on current zone first
+          const primaryZone = zones[zoneIdx];
+          let cell = findNextDumpCell(primaryZone, grid);
+          
           if (!cell) {
-            // Try other zones
+            // Current zone is done, try others
             let found = false;
-            for (const z of zones) {
+            for (let zi = 0; zi < zones.length; zi++) {
+              const z = zones[zi];
               const c = findNextDumpCell(z, grid);
               if (c && !isCellOccupied(newTrucks, c, truck.id)) {
                 truck.targetCell = { row: c.row, col: c.col };
@@ -293,9 +308,10 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
             if (!found) missedThisStep++;
             break;
           }
+          
           if (isCellOccupied(newTrucks, cell, truck.id)) {
-            // Skip to next available
-            const altCells = zone.cells.filter(c => !grid[c.row][c.col].filled && c.height < 5 && !isCellOccupied(newTrucks, c, truck.id));
+            const sorted = cornerDistanceSort(primaryZone.cells);
+            const altCells = sorted.filter(c => !grid[c.row][c.col].filled && grid[c.row][c.col].height < 5 && !isCellOccupied(newTrucks, c, truck.id));
             if (altCells.length > 0) {
               const alt = altCells[0];
               truck.targetCell = { row: alt.row, col: alt.col };
@@ -318,15 +334,26 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
         }
 
         case 'moving_to_dump': {
-          if (checkTruckCollision(truck, newTrucks)) {
+          // Apply avoidance steering instead of hard stop
+          const avoid = avoidanceSteering(truck, newTrucks);
+          const tooClose = checkTruckCollision(truck, newTrucks);
+          
+          if (tooClose && (Math.abs(avoid.vx) > 0.1 || Math.abs(avoid.vy) > 0.1)) {
+            // Steer around
+            truck.x += avoid.vx * 0.8;
+            truck.y += avoid.vy * 0.8;
+            // Still try to move toward target
+            moveToward(truck, truck.targetX, truck.targetY, effectiveSpeed * 0.3);
+          } else if (tooClose) {
             truck.state = 'waiting';
-            truck.waitTimer = 8;
+            truck.waitTimer = 5;
             break;
-          }
-          const arrived = moveToward(truck, truck.targetX, truck.targetY, effectiveSpeed);
-          if (arrived) {
-            truck.state = 'dumping';
-            truck.dumpTimer = DEFAULT_CONFIG.dumpDuration;
+          } else {
+            const arrived = moveToward(truck, truck.targetX, truck.targetY, effectiveSpeed);
+            if (arrived) {
+              truck.state = 'dumping';
+              truck.dumpTimer = DEFAULT_CONFIG.dumpDuration;
+            }
           }
           break;
         }
@@ -334,7 +361,6 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
         case 'dumping': {
           truck.dumpTimer -= speed;
           if (truck.dumpTimer <= 0) {
-            // Perform dump
             if (truck.targetCell) {
               const cell = grid[truck.targetCell.row][truck.targetCell.col];
               cell.height = Math.min(cell.height + 1, 5);
@@ -342,6 +368,12 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
               truck.dumpCount++;
               newDumps++;
               zones[truck.assignedZone].dumpCount++;
+              
+              // Spawn particles at dump location
+              newParticles.push(...createDumpParticles(truck.x, truck.y));
+              
+              // Play sound
+              playDumpSound();
             }
             truck.state = 'returning';
             truck.targetX = ENTRY_POINT.x;
@@ -353,6 +385,12 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
         }
 
         case 'returning': {
+          // Apply avoidance while returning too
+          const avoid = avoidanceSteering(truck, newTrucks);
+          if (Math.abs(avoid.vx) > 0.1 || Math.abs(avoid.vy) > 0.1) {
+            truck.x += avoid.vx * 0.5;
+            truck.y += avoid.vy * 0.5;
+          }
           const arrived = moveToward(truck, truck.targetX, truck.targetY, effectiveSpeed * 1.2);
           if (arrived) {
             truck.state = 'idle';
@@ -390,6 +428,8 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
       grid: [...grid],
       metrics: newMetrics,
       tick: state.tick + 1,
+      particles: newParticles,
+      currentZoneIndex: zoneIdx,
     });
   },
 }));

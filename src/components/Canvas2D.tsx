@@ -1,10 +1,11 @@
 import React, { useRef, useEffect, useCallback } from 'react';
 import { useSimulationStore } from '@/simulation/store';
 import { ZONE_COLORS, ZONE_BORDER_COLORS, YARD_POLYGON, DEFAULT_CONFIG } from '@/simulation/config';
+import { drawParticles } from '@/simulation/particles';
 
 const Canvas2D: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const { grid, zones, trucks, showHeatmap, tick } = useSimulationStore();
+  const { grid, zones, trucks, showHeatmap, tick, particles } = useSimulationStore();
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -74,7 +75,6 @@ const Canvas2D: React.FC = () => {
         const cy = DEFAULT_CONFIG.yardPadding + cell.row * cellH;
 
         if (showHeatmap || cell.height > 0) {
-          // Height-based coloring
           const t = cell.height / 5;
           const r = Math.round(250 - t * 100);
           const g = Math.round(230 - t * 120);
@@ -83,7 +83,6 @@ const Canvas2D: React.FC = () => {
           ctx.fillRect(cx + 0.5, cy + 0.5, cellW - 1, cellH - 1);
         }
 
-        // Grid lines
         ctx.strokeStyle = '#E5E7EB';
         ctx.lineWidth = 0.5;
         ctx.strokeRect(cx, cy, cellW, cellH);
@@ -122,38 +121,107 @@ const Canvas2D: React.FC = () => {
       }
     }
 
-    // Draw trucks
+    // Draw trucks with enhanced visuals
     for (const truck of trucks) {
       const tx = truck.x;
       const ty = truck.y;
-      const size = 10;
+      const size = 12;
+
+      ctx.save();
+
+      // Outer glow for active trucks
+      if (truck.state === 'moving_to_dump' || truck.state === 'dumping') {
+        ctx.shadowColor = truck.state === 'dumping' ? '#10B981' : '#FACC15';
+        ctx.shadowBlur = 8;
+      }
 
       // Shadow
-      ctx.fillStyle = 'rgba(0,0,0,0.1)';
-      ctx.fillRect(tx - size / 2 + 1, ty - size / 2 + 1, size, size);
+      ctx.fillStyle = 'rgba(0,0,0,0.15)';
+      ctx.beginPath();
+      ctx.roundRect(tx - size / 2 + 1.5, ty - size / 2 + 1.5, size, size, 2);
+      ctx.fill();
+      ctx.shadowBlur = 0;
 
-      // Truck body
-      ctx.fillStyle = truck.state === 'waiting' ? '#EF4444' : truck.state === 'dumping' ? '#10B981' : truck.color;
-      ctx.fillRect(tx - size / 2, ty - size / 2, size, size);
+      // Truck body with gradient
+      const bodyGrad = ctx.createLinearGradient(tx - size / 2, ty - size / 2, tx + size / 2, ty + size / 2);
+      if (truck.state === 'waiting') {
+        bodyGrad.addColorStop(0, '#EF4444');
+        bodyGrad.addColorStop(1, '#DC2626');
+      } else if (truck.state === 'dumping') {
+        bodyGrad.addColorStop(0, '#10B981');
+        bodyGrad.addColorStop(1, '#059669');
+      } else {
+        bodyGrad.addColorStop(0, truck.color);
+        bodyGrad.addColorStop(1, '#D97706');
+      }
+      ctx.fillStyle = bodyGrad;
+      ctx.beginPath();
+      ctx.roundRect(tx - size / 2, ty - size / 2, size, size, 2);
+      ctx.fill();
+
+      // Truck cabin detail (small rectangle on top)
+      ctx.fillStyle = 'rgba(0,0,0,0.2)';
+      ctx.fillRect(tx - size / 2 + 1, ty - size / 2 + 1, size * 0.4, size * 0.4);
 
       // Border
       ctx.strokeStyle = '#1F2937';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(tx - size / 2, ty - size / 2, size, size);
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.roundRect(tx - size / 2, ty - size / 2, size, size, 2);
+      ctx.stroke();
 
-      // Dumping animation
+      ctx.restore();
+
+      // Dumping animation - expanding rings
       if (truck.state === 'dumping') {
-        const pulseSize = size + 4 + Math.sin(tick * 0.3) * 3;
-        ctx.strokeStyle = 'hsla(160, 84%, 39%, 0.4)';
-        ctx.lineWidth = 1.5;
-        ctx.strokeRect(tx - pulseSize / 2, ty - pulseSize / 2, pulseSize, pulseSize);
+        for (let ring = 0; ring < 3; ring++) {
+          const phase = (tick * 0.15 + ring * 2) % 6;
+          const ringSize = size + phase * 4;
+          const ringAlpha = Math.max(0, 0.5 - phase * 0.08);
+          ctx.strokeStyle = `hsla(160, 84%, 39%, ${ringAlpha})`;
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.arc(tx, ty, ringSize / 2, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+        
+        // Dump progress bar
+        const progress = 1 - truck.dumpTimer / DEFAULT_CONFIG.dumpDuration;
+        const barW = 20;
+        const barH = 3;
+        ctx.fillStyle = 'rgba(0,0,0,0.3)';
+        ctx.fillRect(tx - barW / 2, ty + size / 2 + 3, barW, barH);
+        ctx.fillStyle = '#10B981';
+        ctx.fillRect(tx - barW / 2, ty + size / 2 + 3, barW * progress, barH);
       }
 
-      // Waiting animation
+      // Waiting animation - pulsing red dot + exclamation
       if (truck.state === 'waiting') {
-        ctx.fillStyle = '#EF4444';
+        const pulse = 0.5 + Math.sin(tick * 0.4) * 0.5;
+        ctx.fillStyle = `rgba(239, 68, 68, ${pulse})`;
         ctx.beginPath();
-        ctx.arc(tx, ty - size / 2 - 5, 3, 0, Math.PI * 2);
+        ctx.arc(tx, ty - size / 2 - 6, 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#FFF';
+        ctx.font = 'bold 5px Inter';
+        ctx.textAlign = 'center';
+        ctx.fillText('!', tx, ty - size / 2 - 4);
+      }
+
+      // Direction indicator (small triangle showing heading)
+      if (truck.state === 'moving_to_dump' || truck.state === 'returning') {
+        const dx = truck.targetX - truck.x;
+        const dy = truck.targetY - truck.y;
+        const angle = Math.atan2(dy, dx);
+        const arrowDist = size / 2 + 4;
+        const ax = tx + Math.cos(angle) * arrowDist;
+        const ay = ty + Math.sin(angle) * arrowDist;
+        ctx.fillStyle = truck.state === 'moving_to_dump' ? '#FACC15' : '#9CA3AF';
+        ctx.beginPath();
+        ctx.moveTo(ax + Math.cos(angle) * 3, ay + Math.sin(angle) * 3);
+        ctx.lineTo(ax + Math.cos(angle + 2.3) * 3, ay + Math.sin(angle + 2.3) * 3);
+        ctx.lineTo(ax + Math.cos(angle - 2.3) * 3, ay + Math.sin(angle - 2.3) * 3);
+        ctx.closePath();
         ctx.fill();
       }
 
@@ -161,7 +229,7 @@ const Canvas2D: React.FC = () => {
       ctx.fillStyle = '#1F2937';
       ctx.font = '600 7px JetBrains Mono';
       ctx.textAlign = 'center';
-      ctx.fillText(truck.label, tx, ty + size / 2 + 9);
+      ctx.fillText(truck.label, tx, ty + size / 2 + 12);
 
       // State label
       const stateLabels: Record<string, string> = {
@@ -173,9 +241,12 @@ const Canvas2D: React.FC = () => {
       };
       ctx.fillStyle = '#9CA3AF';
       ctx.font = '500 5px JetBrains Mono';
-      ctx.fillText(stateLabels[truck.state] || '', tx, ty + size / 2 + 15);
+      ctx.fillText(stateLabels[truck.state] || '', tx, ty + size / 2 + 18);
       ctx.textAlign = 'left';
     }
+
+    // Draw particles
+    drawParticles(ctx, particles);
 
     // Entry point indicator
     ctx.beginPath();
@@ -191,7 +262,7 @@ const Canvas2D: React.FC = () => {
     ctx.fillText('ENTRY', 20, 256);
     ctx.textAlign = 'left';
 
-  }, [grid, zones, trucks, showHeatmap, tick]);
+  }, [grid, zones, trucks, showHeatmap, tick, particles]);
 
   useEffect(() => {
     draw();
