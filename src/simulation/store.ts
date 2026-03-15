@@ -186,9 +186,27 @@ function checkTruckCollision(truck: Truck, trucks: Truck[]): boolean {
     if (other.id === truck.id) continue;
     if (other.state === 'idle') continue;
     const d = distance(truck, other);
-    if (d < 16) return true;
+    if (d < 20) return true; // increased safe distance
   }
   return false;
+}
+
+// Steer around nearby trucks instead of just stopping
+function avoidanceSteering(truck: Truck, trucks: Truck[]): { vx: number; vy: number } {
+  let avoidX = 0;
+  let avoidY = 0;
+  for (const other of trucks) {
+    if (other.id === truck.id || other.state === 'idle') continue;
+    const dx = truck.x - other.x;
+    const dy = truck.y - other.y;
+    const d = Math.sqrt(dx * dx + dy * dy);
+    if (d < 30 && d > 0) {
+      const force = (30 - d) / 30;
+      avoidX += (dx / d) * force * 1.5;
+      avoidY += (dy / d) * force * 1.5;
+    }
+  }
+  return { vx: avoidX, vy: avoidY };
 }
 
 export const useSimulationStore = create<SimulationState>((set, get) => ({
