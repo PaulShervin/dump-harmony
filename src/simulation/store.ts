@@ -121,13 +121,36 @@ function createTrucks(zones: Zone[]): Truck[] {
   return trucks;
 }
 
+function cornerDistanceSort(cells: GridCell[]): GridCell[] {
+  // Sort cells so corners come first, then edges, then interior (spiral inward)
+  if (cells.length === 0) return [];
+  const minR = Math.min(...cells.map(c => c.row));
+  const maxR = Math.max(...cells.map(c => c.row));
+  const minC = Math.min(...cells.map(c => c.col));
+  const maxC = Math.max(...cells.map(c => c.col));
+  const centerR = (minR + maxR) / 2;
+  const centerC = (minC + maxC) / 2;
+
+  // Distance from center (higher = more corner-like)
+  return [...cells].sort((a, b) => {
+    const distA = Math.abs(a.row - centerR) + Math.abs(a.col - centerC);
+    const distB = Math.abs(b.row - centerR) + Math.abs(b.col - centerC);
+    return distB - distA; // corners first (farthest from center)
+  });
+}
+
 function findNextDumpCell(zone: Zone, grid: GridCell[][]): GridCell | null {
-  // Structured: row-by-row, left-to-right, skip filled
-  for (const cell of zone.cells) {
+  // Corner-first: sort cells by distance from zone center (corners first)
+  const sorted = cornerDistanceSort(zone.cells);
+  for (const cell of sorted) {
     const gc = grid[cell.row][cell.col];
     if (!gc.filled && gc.height < 5) return gc;
   }
   return null;
+}
+
+function isZoneComplete(zone: Zone, grid: GridCell[][]): boolean {
+  return zone.cells.every(c => grid[c.row][c.col].filled || grid[c.row][c.col].height >= 5);
 }
 
 function isCellOccupied(trucks: Truck[], cell: { row: number; col: number }, excludeId: number): boolean {
