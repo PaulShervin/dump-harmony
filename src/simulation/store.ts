@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import { GridCell, Zone, Truck, SimMetrics, Point, TruckState } from './types';
 import { DEFAULT_CONFIG, ZONE_COLORS, ZONE_BORDER_COLORS, TRUCK_COLORS, ENTRY_POINT } from './config';
+import { playDumpSound } from './sounds';
+import { Particle, createDumpParticles, updateParticles } from './particles';
 
 interface SimulationState {
   // State
