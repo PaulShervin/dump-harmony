@@ -17,6 +17,8 @@ interface SimulationState {
   zones: Zone[];
   trucks: Truck[];
   metrics: SimMetrics;
+  particles: Particle[];
+  currentZoneIndex: number; // which zone is being filled
 
   // Actions
   init: () => void;
